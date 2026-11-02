@@ -123,6 +123,30 @@ exports.getDirectMessages = async (req, res) => {
   }
 };
 
+// Helper to check if a user has access to a club's channel (Admin, assigned Club Coordinator, or active Club Member)
+const checkClubAccess = async (userId, userRole, clubId) => {
+  if (userRole === 'admin') return true;
+
+  if (userRole === 'coordinator') {
+    const coord = await ClubCoordinator.findOne({
+      where: { user_id: userId, club_id: clubId }
+    });
+    return !!coord;
+  }
+
+  if (userRole === 'student') {
+    const student = await Student.findOne({ where: { user_id: userId } });
+    if (student) {
+      const member = await ClubMember.findOne({
+        where: { student_id: student.id, club_id: clubId }
+      });
+      return !!member;
+    }
+  }
+
+  return false;
+};
+
 // Get club channel messages
 exports.getClubMessages = async (req, res) => {
   try {
@@ -137,26 +161,8 @@ exports.getClubMessages = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Club not found.' });
     }
 
-    // Verify access: Admin or Coordinator of this club or active Club Member
-    let hasAccess = req.user.role === 'admin';
-
-    if (!hasAccess && req.user.role === 'coordinator') {
-      const coord = await ClubCoordinator.findOne({
-        where: { user_id: userId, club_id: clubId }
-      });
-      if (coord) hasAccess = true;
-    }
-
-    if (!hasAccess && req.user.role === 'student') {
-      const student = await Student.findOne({ where: { user_id: userId } });
-      if (student) {
-        const member = await ClubMember.findOne({
-          where: { student_id: student.id, club_id: clubId }
-        });
-        if (member) hasAccess = true;
-      }
-    }
-
+    // Verify access: Admin, Coordinator of this club, or active Club Member
+    const hasAccess = await checkClubAccess(userId, req.user.role, clubId);
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
@@ -201,12 +207,35 @@ exports.sendMessage = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Message content cannot be empty.' });
     }
 
-    if (message_type === 'direct' && !receiver_id) {
-      return res.status(400).json({ success: false, message: 'Recipient is required for direct messages.' });
+    if (message_type === 'direct') {
+      if (!receiver_id) {
+        return res.status(400).json({ success: false, message: 'Recipient is required for direct messages.' });
+      }
+
+      const recipient = await User.findByPk(receiver_id);
+      if (!recipient) {
+        return res.status(404).json({ success: false, message: 'Recipient user not found.' });
+      }
     }
 
-    if (message_type === 'club_channel' && !club_id) {
-      return res.status(400).json({ success: false, message: 'Club ID is required for club channel messages.' });
+    if (message_type === 'club_channel') {
+      if (!club_id) {
+        return res.status(400).json({ success: false, message: 'Club ID is required for club channel messages.' });
+      }
+
+      const club = await Club.findByPk(club_id);
+      if (!club) {
+        return res.status(404).json({ success: false, message: 'Club not found.' });
+      }
+
+      // Verify access: Admin, Coordinator of this club, or active Club Member
+      const hasAccess = await checkClubAccess(senderId, req.user.role, club_id);
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'You must be an accepted member or coordinator of this club to post in the channel.'
+        });
+      }
     }
 
     const newMessage = await Message.create({

@@ -110,7 +110,40 @@ const registerForClub = async (req, res) => {
       return res.status(404).json({ message: 'Student profile not found. Complete your profile first.' });
     }
 
-    // Check if already registered
+    // Check if club exists
+    const club = await Club.findByPk(clubId);
+    if (!club) {
+      return res.status(404).json({ message: 'Club not found' });
+    }
+
+    // Check registration status
+    if (club.registration_status !== 'open') {
+      return res.status(400).json({ message: 'Club registrations are currently closed' });
+    }
+
+    // Check registration date window (start and deadline)
+    const now = new Date();
+    if (club.registration_start && now < new Date(club.registration_start)) {
+      return res.status(400).json({ message: 'Club registrations have not started yet' });
+    }
+
+    if (club.registration_end && now > new Date(club.registration_end)) {
+      return res.status(400).json({ message: 'Club registration deadline has passed' });
+    }
+
+    // Check if student is already a member of this club
+    const existingMember = await ClubMember.findOne({
+      where: {
+        student_id: student.id,
+        club_id: clubId
+      }
+    });
+
+    if (existingMember) {
+      return res.status(400).json({ message: 'You are already a member of this club' });
+    }
+
+    // Check if student has already applied
     const existingReg = await ClubRegistration.findOne({
       where: {
         student_id: student.id,
@@ -122,14 +155,12 @@ const registerForClub = async (req, res) => {
       return res.status(400).json({ message: 'You have already applied to this club' });
     }
 
-    // Check if club is open
-    const club = await Club.findByPk(clubId);
-    if (!club) {
-      return res.status(404).json({ message: 'Club not found' });
-    }
-
-    if (club.registration_status !== 'open') {
-      return res.status(400).json({ message: 'Club registrations are currently closed' });
+    // Check club max members capacity
+    if (club.max_members) {
+      const currentMemberCount = await ClubMember.count({ where: { club_id: clubId } });
+      if (currentMemberCount >= club.max_members) {
+        return res.status(400).json({ message: 'Club has reached its maximum member capacity' });
+      }
     }
 
     const registration = await ClubRegistration.create({
